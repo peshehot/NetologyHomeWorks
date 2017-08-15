@@ -1,0 +1,98 @@
+def load_data(df):
+    rows = []
+    cols = []
+    data = []
+    
+    uid_to_row = {}
+    iid_to_col = {}
+    
+    for t in df.itertuples():
+        row_id = uid_to_row.setdefault(t.uid, len(uid_to_row))
+        col_id = iid_to_col.setdefault(t.iid, len(iid_to_col))
+        rating = t.rating
+        
+        rows.append(row_id)
+        cols.append(col_id)
+        data.append(rating)
+        
+    ui_m = csr_matrix((data, (rows, cols)))
+    return ui_m, uid_to_row, iid_to_col
+	
+	
+	
+X_ui, uid_to_row, iid_to_col = load_data(training_df)
+
+X_ui.shape
+
+
+from sklearn.metrics.pairwise import cosine_similarity
+ii_sim_m = cosine_similarity(X_ui.T.tocsr(), dense_output=False)
+
+print("Density", ii_sim_m.nnz / (ii_sim_m.shape[0] * ii_sim_m.shape[1]))
+print("Max sim", ii_sim_m.data.max())
+print("Min sim", ii_sim_m.data.min())
+print("Shape", ii_sim_m.shape)
+
+
+ii_sim_m = nullify_main_diagonal(ii_sim_m)
+ii_sim_m = get_topk(ii_sim_m, top=30)
+
+len(iid_to_col)
+
+
+
+
+
+class ColobarativeItem(BasicRecommender):
+    def __init__(self, top):
+        self.top=top
+    def fit_warm(self,df, ii_sim_m, X_ui, iid_to_col, uid_to_row ):
+        self.ii_sim_m = ii_sim_m
+        self.X_ui = X_ui
+        self.df = df
+        self.recs = self._prepare_recs(df)
+        self.iid_to_col = iid_to_col
+        self.uid_to_row = uid_to_row
+    def _prepare_recs(self, df):
+        # считаем количество отзывов для каждого объекта (pandas сортирует их по убыванию)
+        return df[(df.dt>=1280865972) & (df.rating==5)].iid.value_counts()
+    
+    def get_recs(self, uid):
+        item_id = 0
+        res=[]
+        uid_row = self.uid_to_row[uid]
+        up = ii_sim_m.dot(X_ui[uid_row].T)
+        down = np.abs(ii_sim_m).dot(binarize(X_ui[uid_row]).T)
+        sim = [0]*up.shape[0]
+        for i in range(0, up.shape[0]):
+            tmpup=up[i].sum()
+            tmpdown=down[i].sum()
+            iid = list(self.iid_to_col.keys())[list(self.iid_to_col.values()).index(i)]
+            if (tmpup!=0) & (tmpdown!=0):
+                res.append([iid,up/down])
+
+        res=pd.DataFrame(res, columns=['iid', 'rating'])
+        res.set_index(keys='iid', drop=True, inplace=True)
+        res.sort_values('rating', axis=0, ascending=False)
+        res=res.rating
+        return(res.head(self.top).to_dict() )
+    def get_batch_recs(self, uids):
+        res_dict ={}
+        for uid in tqdm(list(uids)):
+            res_dict[uid] = self.get_recs(uid)
+        return res_dict
+		
+		
+		
+cfilter_item= ColobarativeItem(10)
+
+
+cfilter_item.fit_warm(training_df, ii_sim_m, X_ui, iid_to_col, uid_to_row)
+
+%%time
+cfilter_item.get_recs(0)
+
+
+#train_dict_cf = cfilter_item.get_batch_recs(test_dict.uid.unique())
+
+hit_ratio(recs_dict=train_dict_cf, test_dict=test_dict)
